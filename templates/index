@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ADT760 Control Panel</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1 { color: #333; font-size: 1.5em; }
+        form { margin-bottom: 20px; }
+        input, select, button { margin: 5px; padding: 8px; font-size: 1em; }
+        button { cursor: pointer; background-color: #4CAF50; color: white; border: none; border-radius: 4px; }
+        button:hover { background-color: #45a049; }
+        p { margin: 10px 0; font-size: 1em; }
+        .section { border: 1px solid #ccc; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+        .error { color: red; }
+        .success { color: green; }
+    </style>
+</head>
+<body>
+    <div class="section">
+        <h1>Connection Status</h1>
+        <p>Checking connection... <span id="connectionStatus" class="status">N/A</span></p>
+        <button onclick="testConnection()">Test Connection</button>
+    </div>
+
+    <div class="section">
+        <h1>Read Pressure</h1>
+        <button type="button" onclick="readPressure()">Read Pressure</button>
+        <button id="startContinuousRead" onclick="startContinuousRead()">Start Continuous Read</button>
+        <p>Current Pressure: <span id="currentPressure" class="status">N/A</span></p>
+    </div>
+
+<div class="section">
+        <h1>Set Pressure and Unit</h1>
+        <form id="setPressureForm">
+            <select name="channel" id="setPressureChannel" onchange="updatePressureRange()">
+                <option value="1">Channel 1: Control Module</option>
+                <option value="2">Channel 2: Internal Module</option>
+                <option value="3">Channel 3: External Module</option>
+            </select>
+            <input type="number" name="pressure_value" placeholder="Pressure value (optional)" step="0.01">
+            <select name="unit" id="unitSelect" onchange="updatePressureRange()">
+                <option value="">Select unit (optional)</option>
+                <option value="PSI">PSI</option>
+                <option value="BAR">BAR</option>
+                <option value="KPA">KPA</option>
+            </select>
+            <input type="submit" value="Set">
+        </form>
+        <p>Pressure Range: <span id="pressureRange" class="status">Select a channel and/or unit</span></p>
+        <p>Current Pressure Set (Channel <span id="currentSetChannel">1</span>): <span id="currentSetPressure" class="status">N/A</span></p>
+    </div>
+
+    <div class="section">
+        <h1>Pressure Stability Status</h1>
+        <form id="readStabilityForm">
+            <button type="button" onclick="readPressureStability()">Read Stability</button>
+        </form>
+        <p>Current Stability: <span id="currentStability" class="status">N/A</span></p>
+    </div>
+
+    <div class="section">
+        <h1>Output Mode</h1>
+        <form id="setOutputModeForm">
+            <select name="mode" required>
+                <option value="CONTrol">CONTROL</option>
+                <option value="MEASure">MEASURE</option>
+                <option value="VENT">VENT</option>
+            </select>
+            <input type="submit" value="Set Output Mode">
+        </form>
+        <p>Current Mode: <span id="outputMode" class="status">N/A</span></p>
+    </div>
+
+    <div class="section">
+        <h1>WiFi Configuration</h1>
+        <form id="setWifiForm">
+            <input type="text" name="ssid" placeholder="SSID" required>
+            <input type="text" name="password" placeholder="Password" required>
+            <select name="encryption">
+                <option value="WPA2">WPA2</option>
+                <option value="WPA">WPA</option>
+                <option value="NONE">NONE</option>
+            </select>
+            <input type="submit" value="Set WiFi">
+            <button onclick="checkWifiStatus()">Check WiFi Status</button>
+        </form>
+        <p>WiFi Status: <span id="wifiStatus" class="status">N/A</span></p>
+    </div>
+
+    <div class="section">
+        <h1>IP Configuration</h1>
+        <form id="setIpForm">
+            <input type="text" name="ip_address" placeholder="IP Address (e.g., 192.168.1.36)" required>
+            <input type="submit" value="Set IP">
+            <button type="button" onclick="readIp()">Read IP</button>
+        </form>
+        <p>Current IP: <span id="currentIp" class="status">N/A</span></p>
+    </div>
+
+    <div class="section">
+        <h1>Device Information</h1>
+        <button onclick="readDeviceInfo()">Read Device Info</button>
+        <p>Device Info: <span id="deviceInfo" class="status">N/A</span></p>
+    </div>
+
+    <script>
+        const BASE_URL = 'http://192.168.1.14:8000';
+        // Dải đo theo đơn vị
+        const pressureRanges = {
+            PSI: { min: -12.5, max: 300 },
+            BAR: { min: -0.8, max: 20.7 },
+            KPA: { min: -86.2, max: 2068.4 }
+        };
+
+        async function updatePressureRange() {
+            const channel = document.getElementById('setPressureChannel').value;
+            const unit = document.getElementById('unitSelect').value.toUpperCase();
+            let activeUnit = unit;
+            let rangeText = 'Loading...'; // Hiển thị trạng thái tải thay vì lỗi ngay lập tức
+
+            if (unit) {
+                if (pressureRanges[unit]) {
+                    rangeText = `Range: ${pressureRanges[unit].min} to ${pressureRanges[unit].max} ${unit}`;
+                } else {
+                    rangeText = 'Unknown unit';
+                }
+            } else {
+                try {
+                    const result = await sendRequest(`/get_current_unit?channel=${channel}`);
+                    if (result.status === 'success') {
+                        activeUnit = result.response.toUpperCase();
+                        if (pressureRanges[activeUnit]) {
+                            rangeText = `Range: ${pressureRanges[activeUnit].min} to ${pressureRanges[activeUnit].max} ${activeUnit}`;
+                        } else {
+                            rangeText = `Unknown unit: ${activeUnit}`;
+                        }
+                    } else {
+                        rangeText = `Error: ${result.message}`;
+                    }
+                } catch (error) {
+                    console.error('Get current unit error:', error.message);
+                    rangeText = `N/A`; 
+                }
+            }
+
+            document.getElementById('pressureRange').textContent = rangeText;
+            document.getElementById('pressureRange').className = rangeText.startsWith('Error') ? 'status error' : 'status success';
+            return activeUnit;
+        }
+
+        // Cập nhật dải đo khi tải trang
+        window.onload = updatePressureRange;
+        async function sendRequest(url, method = 'GET', data = null) {
+            try {
+                const options = { method };
+                if (data) {
+                    options.body = new FormData();
+                    for (const [key, value] of Object.entries(data)) {
+                        options.body.append(key, value);
+                    }
+                }
+                const response = await fetch(`${BASE_URL}${url}`, options);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP error! Status: ${response.status}, Text: ${errorText}`);
+                }
+                return await response.json();
+            } catch (error) {
+                throw error;
+            }
+        }
+
+        async function testConnection() {
+            try {
+                const result = await sendRequest('/read_device_info');
+                document.getElementById('connectionStatus').textContent = result.status === 'success' ? 'Connected' : result.message;
+                document.getElementById('connectionStatus').className = result.status === 'success' ? 'status success' : 'status error';
+            } catch (error) {
+                console.error('Test Connection error:', error.message);
+                document.getElementById('connectionStatus').textContent = `Error: ${error.message}`;
+                document.getElementById('connectionStatus').className = 'status error';
+            }
+        }
+
+        async function readPressure() {
+            const channel = document.getElementById('pressureChannel').value;
+            console.log('Reading pressure for channel:', channel); // Debug
+            try {
+                const result = await sendRequest(`/read_pressure?channel=${channel}`);
+                console.log('Read pressure result:', result); // Debug
+                if (document.getElementById('currentPressure') && document.getElementById('currentChannel')) {
+                    updateElementText('currentPressure', result.status === 'success' ? result.response : result.message, 
+                        result.status === 'success' ? 'status success' : 'status error');
+                    updateElementText('currentChannel', channel);
+                } else {
+                    console.error('One or more elements (currentPressure or currentChannel) not found');
+                }
+            } catch (error) {
+                console.error('Read Pressure error:', error.message);
+                updateElementText('currentPressure', `Error: ${error.message}`, 'status error');
+            }
+        }
+
+
+        let continuousReadInterval = null;
+        async function startContinuousRead() {
+            if (continuousReadInterval) {
+                clearInterval(continuousReadInterval);
+                continuousReadInterval = null;
+                document.getElementById('startContinuousRead').textContent = 'Start Continuous Read';
+                return;
+            }
+            try {
+                continuousReadInterval = setInterval(async () => {
+                    const result = await sendRequest('/read_pressure');
+                    document.getElementById('currentPressure').textContent = result.status === 'success' ? result.response : result.message;
+                    document.getElementById('currentPressure').className = result.status === 'success' ? 'status success' : 'status error';
+                }, 1000);
+                document.getElementById('startContinuousRead').textContent = 'Stop Continuous Read';
+            } catch (error) {
+                console.error('Continuous Read error:', error.message);
+                document.getElementById('currentPressure').textContent = `Error: ${error.message}`;
+                document.getElementById('currentPressure').className = 'status error';
+            }
+        }
+
+         async function readPressureStability() {
+            try {
+                const result = await sendRequest(`/read_pressure_stability?`);
+                document.getElementById('currentStability').textContent = result.status === 'success' ? result.response : result.message;
+                document.getElementById('currentStability').className = result.status === 'success' ? 'status success' : 'status error';
+            } catch (error) {
+                console.error('Read Pressure Stability error:', error.message);
+                document.getElementById('currentStability').textContent = `Error: ${error.message}`;
+                document.getElementById('currentStability').className = 'status error';
+            }
+        }
+
+        async function checkWifiStatus() {
+            try {
+                const result = await sendRequest('/check_wifi_status');
+                document.getElementById('wifiStatus').textContent = result.status === 'success' ? result.response : result.message;
+                document.getElementById('wifiStatus').className = result.status === 'success' ? 'status success' : 'status error';
+            } catch (error) {
+                console.error('Check WiFi Status error:', error.message);
+                document.getElementById('wifiStatus').textContent = `Error: ${error.message}`;
+                document.getElementById('wifiStatus').className = 'status error';
+            }
+        }
+
+        async function readDeviceInfo() {
+            try {
+                const result = await sendRequest('/read_device_info');
+                document.getElementById('deviceInfo').textContent = result.status === 'success' ? result.response : result.message;
+                document.getElementById('deviceInfo').className = result.status === 'success' ? 'status success' : 'status error';
+            } catch (error) {
+                console.error('Read Device Info error:', error.message);
+                document.getElementById('deviceInfo').textContent = `Error: ${error.message}`;
+                document.getElementById('deviceInfo').className = 'status error';
+            }
+        }
+
+         async function readIp() {
+            try {
+                const result = await sendRequest('/read_ip');
+                document.getElementById('currentIp').textContent = result.status === 'success' ? result.response : result.message;
+                document.getElementById('currentIp').className = result.status === 'success' ? 'status success' : 'status error';
+            } catch (error) {
+                console.error('Read IP error:', error.message);
+                document.getElementById('currentIp').textContent = `Error: ${error.message}`;
+                document.getElementById('currentIp').className = 'status error';
+            }
+        }
+
+        // Xử lý form Set Pressure
+        document.getElementById('setPressureForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const pressureValue = document.querySelector('input[name="pressure_value"]').value.trim();
+                const unit = document.querySelector('select[name="unit"]').value.toUpperCase();
+                const channel = document.getElementById('setPressureChannel').value;
+
+                // Kiểm tra nếu không chọn đơn vị
+                if (!unit) {
+                    alert('Phải chọn giá trị và đơn vị trước');
+                    document.getElementById('currentSetPressure').textContent = 'Phải chọn giá trị và đơn vị trước';
+                    document.getElementById('currentSetPressure').className = 'status error';
+                    return;
+                }
+
+                if (!pressureValue && !unit) {
+                    alert('Vui lòng nhập ít nhất một giá trị áp suất hoặc chọn đơn vị.');
+                    document.getElementById('currentSetPressure').textContent = 'Vui lòng nhập ít nhất một giá trị áp suất hoặc chọn đơn vị.';
+                    document.getElementById('currentSetPressure').className = 'status error';
+                    return;
+                }
+
+                if (pressureValue) {
+                    const pressureFloat = parseFloat(pressureValue);
+                    if (isNaN(pressureFloat)) {
+                        alert('Giá trị áp suất phải là một số.');
+                        document.getElementById('currentSetPressure').textContent = 'Giá trị áp suất phải là một số.';
+                        document.getElementById('currentSetPressure').className = 'status error';
+                        return;
+                    }
+
+                    let activeUnit = unit;
+                    if (!unit) {
+                        try {
+                            const result = await sendRequest(`/get_current_unit?channel=${channel}`);
+                            if (result.status !== 'success') {
+                                alert(`Không thể lấy đơn vị hiện tại: ${result.message}`);
+                                document.getElementById('currentSetPressure').textContent = `Không thể lấy đơn vị hiện tại: ${result.message}`;
+                                document.getElementById('currentSetPressure').className = 'status error';
+                                return;
+                            }
+                            activeUnit = result.response.toUpperCase();
+                        } catch (error) {
+                            console.error('Lỗi lấy đơn vị hiện tại:', error.message);
+                            alert(`Lỗi: ${error.message}`);
+                            document.getElementById('currentSetPressure').textContent = `Lỗi: ${error.message}`;
+                            document.getElementById('currentSetPressure').className = 'status error';
+                            return;
+                        }
+                    }
+
+                    if (pressureRanges[activeUnit]) {
+                        const { min, max } = pressureRanges[activeUnit];
+                        if (pressureFloat < min || pressureFloat > max) {
+                            alert(`Giá trị áp suất phải nằm trong khoảng ${min} đến ${max} ${activeUnit}.`);
+                            document.getElementById('currentSetPressure').textContent = `Giá trị áp suất phải nằm trong khoảng ${min} đến ${max} ${activeUnit}.`;
+                            document.getElementById('currentSetPressure').className = 'status error';
+                            return;
+                        }
+                    } else {
+                        alert(`Đơn vị không xác định: ${activeUnit}`);
+                        document.getElementById('currentSetPressure').textContent = `Đơn vị không xác định: ${activeUnit}`;
+                        document.getElementById('currentSetPressure').className = 'status error';
+                        return;
+                    }
+                }
+
+                try {
+                    const formData = new FormData();
+                    formData.append('channel', channel);
+                    if (pressureValue) formData.append('pressure_value', pressureValue);
+                    if (unit) formData.append('unit', unit);
+
+                    const result = await sendRequest('/set_pressure_and_unit', 'POST', Object.fromEntries(formData));
+                    document.getElementById('currentSetPressure').textContent = result.status === 'success' ? result.response : result.message;
+                    document.getElementById('currentSetPressure').className = result.status === 'success' ? 'status success' : 'status error';
+                    document.getElementById('currentSetChannel').textContent = channel;
+                    await updatePressureRange();
+                } catch (error) {
+                    console.error('Lỗi đặt áp suất và đơn vị:', error.message);
+                    document.getElementById('currentSetPressure').textContent = `Lỗi: ${error.message}`;
+                    document.getElementById('currentSetPressure').className = 'status error';
+                }
+            });
+
+        // Xử lý form Set Output Mode
+        document.getElementById('setOutputModeForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            try {
+                const formData = new FormData(e.target);
+                const result = await sendRequest('/set_output_mode', 'POST', Object.fromEntries(formData));
+                document.getElementById('outputMode').textContent = result.status === 'success' ? 'Mode set successfully' : result.message;
+                document.getElementById('outputMode').className = result.status === 'success' ? 'status success' : 'status error';
+            } catch (error) {
+                console.error('Set Output Mode error:', error.message);
+                document.getElementById('outputMode').textContent = `Error: ${error.message}`;
+                document.getElementById('outputMode').className = 'status error';
+            }
+        });
+
+        // Xử lý form Set Pressure Unit
+        document.getElementById('setPressureUnitForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            try {
+                const formData = new FormData(e.target);
+                const result = await sendRequest('/set_pressure_unit', 'POST', Object.fromEntries(formData));
+                document.getElementById('pressureUnit').textContent = result.status === 'success' ? 'Unit set successfully' : result.message;
+                document.getElementById('pressureUnit').className = result.status === 'success' ? 'status success' : 'status error';
+            } catch (error) {
+                console.error('Set Pressure Unit error:', error.message);
+                document.getElementById('pressureUnit').textContent = `Error: ${error.message}`;
+                document.getElementById('pressureUnit').className = 'status error';
+            }
+        });
+
+        // Xử lý form Set WiFi
+        document.getElementById('setWifiForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            try {
+                const formData = new FormData(e.target);
+                const result = await sendRequest('/set_wifi', 'POST', Object.fromEntries(formData));
+                document.getElementById('wifiStatus').textContent = result.status === 'success' ? 'WiFi set successfully' : result.message;
+                document.getElementById('wifiStatus').className = result.status === 'success' ? 'status success' : 'status error';
+            } catch (error) {
+                console.error('Set WiFi error:', error.message);
+                document.getElementById('wifiStatus').textContent = `Error: ${error.message}`;
+                document.getElementById('wifiStatus').className = 'status error';
+            }
+        });
+
+        // Xử lý form Set IP
+        document.getElementById('setIpForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            try {
+                const formData = new FormData(e.target);
+                const result = await sendRequest('/set_ip', 'POST', Object.fromEntries(formData));
+                document.getElementById('deviceInfo').textContent = result.status === 'success' ? 'IP set successfully' : result.message;
+                document.getElementById('deviceInfo').className = result.status === 'success' ? 'status success' : 'status error';
+            } catch (error) {
+                console.error('Set IP error:', error.message);
+                document.getElementById('deviceInfo').textContent = `Error: ${error.message}`;
+                document.getElementById('deviceInfo').className = 'status error';
+            }
+        });
+    </script>
+</body>
+</html>
